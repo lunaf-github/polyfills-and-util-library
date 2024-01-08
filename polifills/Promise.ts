@@ -1,3 +1,5 @@
+const AggregateError = require('aggregate-error')
+
 type Resolve<T> = (value: T) => void;
 type Reject<T> = (value: T) => void;
 type FullfilledCb = (arg: any) => any;
@@ -93,14 +95,14 @@ class PolyPromise<T> {
             });
             
 
-            this.#onRejected.push(reason => {
+            this.#onRejected.push(result => {
                 if (!cathCb) {
-                    reject(reason);
+                    reject(result);
                     return;
                 }
 
                 try {
-                    resolve(cathCb(reason))
+                    resolve(cathCb(result))
                 } catch(error) {
                     reject(error)
                 }
@@ -126,6 +128,90 @@ class PolyPromise<T> {
             cb();
             return reason;
         }
+    }
+
+    // Returns a Promise that automatically resolves value, good for converting non promises into promises
+    static resolve(value: any) {
+        return new PolyPromise(resolve => resolve(value));
+    }
+
+    // Returns a Promise that automatically rejects value, used for debugging
+    static reject(reason: any) {
+        return new PolyPromise((resolve, reject) => reject(reason));
+    }
+
+    // Accepts an array of promises and returns a Promise that gets resolved by the promise that gets resolved first, if all 
+    // are rejected it will return an aggregatedError. 
+    static any(promises: PolyPromise<any>[]) {
+        const errors: Error[] = [];
+        let rejectedPromises = 0;
+
+        return new PolyPromise((resolve, reject) => {
+            for (let i = 0; i < promises.length; i++) {
+                promises[i] 
+                    .then(resolve)
+                    .catch(reason => {
+                        errors[i] = reason;
+                        rejectedPromises++;
+
+                        if (rejectedPromises === promises.length) {
+                            reject(new AggregateError(errors, 'All promises were rejected'));
+                        }
+                    })
+            }
+        });
+    }
+
+    // Accepts an array of promies and returns a Promise that sesolves when all promises are resolved, the resolved value is an array of the 
+    // resolved values of each promise inside the array of promises. If any of the promises inside the array fails, the promise will be rejected
+    static all(promises: PolyPromise<any>[]) {
+        const resolvedValues: any[] = [];
+        let resolvedPromises = 0;
+
+        return new PolyPromise((resolve, reject) => {
+            promises.forEach((promise, i) => {
+                promise
+                    .then(result => {
+                        resolvedPromises[i] = result;
+                        resolvedPromises++;
+
+                        if (resolvedPromises === promises.length) {
+                            resolve(resolvedValues);
+                        }
+                    })
+                    .catch(reject)
+            });
+        });
+    }
+    
+    // Accepts an array of promises and returns a Promise that resolves when all promises are settled. 
+    static allSettled(promises: PolyPromise<any>[]) {
+
+        return new PolyPromise(resolve => {
+            const values: any[] = [];
+            let settledPromises = 0;
+    
+            promises.forEach((promise, i) => {
+                promise
+                    .then(value => {
+                        values[i] = {status: STATE.FULLFILLED, value};
+                    })
+                    .catch(reason => {
+                        values[i] = {status: STATE.REJECTED, reason};
+                    })
+                    .finally(() => {
+                        settledPromises++;
+                        if (settledPromises === promises.length) resolve(values);
+                    })
+            });
+        });
+    }
+
+    //  Accepts an array of promises and returns a Promise that settles when first promise is settled
+    static race(promises: PolyPromise<any>[]) {
+        return new PolyPromise((resolve, reject) => {
+            promises.forEach(promise => promise.then(resolve).catch(reject));
+        }); 
     }
 }
 
